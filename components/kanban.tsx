@@ -13,7 +13,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { SharedTask, TaskStatus, mapStatusToColumn, mapColumnToStatus, loadKanbanTasks, saveKanbanTasks } from '@/lib/shared-task-model';
+import { SharedTask, TaskStatus, mapStatusToColumn, mapColumnToStatus } from '@/lib/shared-task-model';
+import { getKanbanCards, saveKanbanCards, subscribeKanbanChanges, migrateGuestDataToSupabase } from '@/lib/supabase-sync';
 
 const PROJECTS_STORAGE_KEY = 'todo-projects';
 
@@ -48,21 +49,38 @@ export function Kanban() {
   useEffect(() => {
     console.log('[v0] Kanban initializing...');
     
-    const loadedTasks = loadKanbanTasks();
-    console.log('[v0] Kanban: Loaded', loadedTasks.length, 'tasks');
-    
-    const now = Date.now();
-    const oneDayInMs = 24 * 60 * 60 * 1000;
-    const cleanedTasks = loadedTasks.filter(task => {
-      if (task.archived && task.archivedAt) {
-        const archivedTime = new Date(task.archivedAt).getTime();
-        return now - archivedTime < oneDayInMs;
+    const loadData = async () => {
+      await migrateGuestDataToSupabase();
+      
+      const loadedTasks = await getKanbanCards();
+      console.log('[v0] Kanban: Loaded', loadedTasks.length, 'tasks');
+      
+      const now = Date.now();
+      const oneDayInMs = 24 * 60 * 60 * 1000;
+      const cleanedTasks = loadedTasks.filter(task => {
+        if (task.archived && task.archivedAt) {
+          const archivedTime = new Date(task.archivedAt).getTime();
+          return now - archivedTime < oneDayInMs;
+        }
+        return true;
+      });
+      
+      console.log('[v0] Kanban: After cleanup:', cleanedTasks.length, 'tasks');
+      setTasks(cleanedTasks);
+      
+      const guestMode = localStorage.getItem('guestMode');
+      const user = localStorage.getItem('currentUser');
+      if (!guestMode && user) {
+        const unsubscribe = subscribeKanbanChanges((updatedCards) => {
+          console.log('[v0] Real-time update received:', updatedCards.length, 'cards');
+          setTasks(updatedCards);
+        });
+        
+        return () => unsubscribe();
       }
-      return true;
-    });
+    };
     
-    console.log('[v0] Kanban: After cleanup:', cleanedTasks.length, 'tasks');
-    setTasks(cleanedTasks);
+    loadData();
     
     const savedProjects = localStorage.getItem(PROJECTS_STORAGE_KEY);
     if (savedProjects) {
@@ -97,7 +115,7 @@ export function Kanban() {
     });
   };
 
-  const addTask = (columnId: string) => {
+  const addTask = async (columnId: string) => {
     if (!newTaskText[columnId]?.trim()) return;
 
     console.log('[v0] Kanban: addTask called with:', newTaskText[columnId]);
@@ -117,13 +135,14 @@ export function Kanban() {
 
     const updated = [...tasks, newTask];
     setTasks(updated);
-    saveKanbanTasks(updated);
+    
+    await saveKanbanCards(updated);
     console.log('[v0] Kanban: Saved successfully');
 
     setNewTaskText({ ...newTaskText, [columnId]: '' });
   };
 
-  const addCard = () => {
+  const addCard = async () => {
     if (newCardTitle.trim() && selectedProject) {
       const newTask: SharedTask = {
         title: newCardTitle.trim(),
@@ -139,7 +158,7 @@ export function Kanban() {
 
       const updatedTasks = [...tasks, newTask];
       setTasks(updatedTasks);
-      saveKanbanTasks(updatedTasks);
+      await saveKanbanCards(updatedTasks);
       console.log('[v0] Kanban: Added card, new count:', updatedTasks.length);
 
       setNewCardTitle('');
@@ -149,13 +168,13 @@ export function Kanban() {
     }
   };
 
-  const deleteTask = (taskId: string) => {
+  const deleteTask = async (taskId: string) => {
     const updated = tasks.filter((t) => t.id !== taskId);
     setTasks(updated);
-    saveKanbanTasks(updated);
+    await saveKanbanCards(updated);
   };
 
-  const moveTask = (taskId: string, toColumnId: string) => {
+  const moveTask = async (taskId: string, toColumnId: string) => {
     const newStatus = mapColumnToStatus(toColumnId);
     const updated = tasks.map((t) => 
       t.id === taskId 
@@ -163,7 +182,7 @@ export function Kanban() {
         : t
     );
     setTasks(updated);
-    saveKanbanTasks(updated);
+    await saveKanbanCards(updated);
   };
 
   const duplicateTask = async (taskId: string) => {
@@ -178,7 +197,7 @@ export function Kanban() {
 
     const updatedTasks = [...tasks, newTask];
     setTasks(updatedTasks);
-    saveKanbanTasks(updatedTasks);
+    await saveKanbanCards(updatedTasks);
   };
 
   const archiveTask = async (taskId: string) => {
@@ -190,23 +209,23 @@ export function Kanban() {
       } : t
     );
     setTasks(updated);
-    saveKanbanTasks(updated);
+    await saveKanbanCards(updated);
   };
 
-  const updateTaskPriority = (taskId: string, priority: 'low' | 'medium' | 'high') => {
+  const updateTaskPriority = async (taskId: string, priority: 'low' | 'medium' | 'high') => {
     const updated = tasks.map((t) =>
       t.id === taskId ? { ...t, priority } : t
     );
     setTasks(updated);
-    saveKanbanTasks(updated);
+    await saveKanbanCards(updated);
   };
 
-  const updateTask = (taskId: string, updates: Partial<SharedTask>) => {
+  const updateTask = async (taskId: string, updates: Partial<SharedTask>) => {
     const updated = tasks.map((t) =>
       t.id === taskId ? { ...t, ...updates } : t
     );
     setTasks(updated);
-    saveKanbanTasks(updated);
+    await saveKanbanCards(updated);
   };
 
   const addComment = (taskId: string, text: string) => {
@@ -290,7 +309,7 @@ export function Kanban() {
     setProjects(projectList);
   };
 
-  const renameProject = (oldName: string, newName: string) => {
+  const renameProject = async (oldName: string, newName: string) => {
     if (!newName.trim() || oldName === newName) {
       setEditingProjectName(null);
       return;
@@ -308,7 +327,7 @@ export function Kanban() {
       t.project === oldName ? { ...t, project: newName } : t
     );
     setTasks(updated);
-    saveKanbanTasks(updated);
+    await saveKanbanCards(updated);
 
     if (selectedProject === oldName) {
       setSelectedProject(newName);
@@ -334,7 +353,7 @@ export function Kanban() {
     setNewProjectName('');
   };
 
-  const deleteProject = (projectName: string) => {
+  const deleteProject = async (projectName: string) => {
     if (projects.length === 1) {
       alert('Cannot delete the last project. At least one project must remain.');
       return;
@@ -351,7 +370,7 @@ export function Kanban() {
           t.project === projectName ? { ...t, project: targetProject } : t
         );
         setTasks(updated);
-        saveKanbanTasks(updated);
+        await saveKanbanCards(updated);
       }
     }
 
@@ -775,9 +794,7 @@ export function Kanban() {
                           </div>
 
                           <div>
-                            <label className="text-sm font-medium mb-2 block">
-                              Checklist ({task.checklist?.length || 0})
-                            </label>
+                            <label className="text-sm font-medium mb-2 block">Checklist</label>
                             <div className="space-y-2 mb-3">
                               {task.checklist?.map((item) => (
                                 <div key={item.id} className="flex items-center gap-2">

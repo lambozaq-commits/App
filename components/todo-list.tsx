@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { SharedTask, TaskStatus, loadTodoTasks, saveTodoTasks, saveKanbanTasks, loadKanbanTasks } from '@/lib/shared-task-model'; // Changed import
+import { SharedTask } from '@/lib/shared-task-model';
 import { getTodos, saveTodos, subscribeTodoChanges, migrateGuestDataToSupabase } from '@/lib/supabase-sync';
 
 interface SubTask {
@@ -75,9 +75,9 @@ export function TodoList() {
   const [showReminderDialog, setShowReminderDialog] = useState<string | null>(null);
   const [reminderDate, setReminderDate] = useState('');
   const [reminderTime, setReminderTime] = useState('');
-  
-  const [moveToKanbanDialog, setMoveToKanbanDialog] = useState<string | null>(null);
-  const [selectedKanbanColumn, setSelectedKanbanColumn] = useState<TaskStatus>('todo');
+
+  // Removed: const [moveToKanbanDialog, setMoveToKanbanDialog] = useState<string | null>(null);
+  // Removed: const [selectedKanbanColumn, setSelectedKanbanColumn] = useState<TaskStatus>('todo');
 
   const hasInitializedRef = useRef(false);
 
@@ -87,9 +87,29 @@ export function TodoList() {
 
     console.log('[v0] TodoList initializing...');
     
-    const loadedTasks = loadTodoTasks();
-    console.log('[v0] Initial load - tasks count:', loadedTasks.length);
-    setTasks(loadedTasks);
+    const loadData = async () => {
+      await migrateGuestDataToSupabase();
+      
+      const user = localStorage.getItem('currentUser');
+      const users = localStorage.getItem('appUsers');
+      const guestMode = localStorage.getItem('guestMode');
+      console.log('[v0] User:', user, 'Guest mode:', guestMode);
+      
+      const loadedTasks = await getTodos();
+      console.log('[v0] Initial load - tasks count:', loadedTasks.length);
+      setTasks(loadedTasks);
+      
+      if (!guestMode && user) {
+        const unsubscribe = subscribeTodoChanges((updatedTasks) => {
+          console.log('[v0] Real-time update received:', updatedTasks.length, 'tasks');
+          setTasks(updatedTasks);
+        });
+        
+        return () => unsubscribe();
+      }
+    };
+    
+    loadData();
     
     const savedProjects = localStorage.getItem(PROJECTS_STORAGE_KEY);
     const savedSharing = localStorage.getItem(PROJECT_SHARING_KEY);
@@ -229,7 +249,7 @@ export function TodoList() {
     return '';
   };
 
-  const addTodo = () => { // Changed from async
+  const addTodo = async () => {
     if (!newTodo.trim()) return;
 
     console.log('[v0] addTodo called with:', newTodo);
@@ -254,7 +274,8 @@ export function TodoList() {
 
     const updated = [...tasks, newTask];
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    
+    await saveTodos(updated);
     console.log('[v0] Saved successfully');
     
     // Reset form
@@ -265,7 +286,7 @@ export function TodoList() {
     setSelectedRecurring('none');
   };
 
-  const toggleTask = (id: string) => { // Changed from async
+  const toggleTask = async (id: string) => {
     const updated = tasks.map((t) => 
       t.id === id 
         ? { 
@@ -276,7 +297,7 @@ export function TodoList() {
         : t
     );
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
   };
 
   const startEditingTask = (task: SharedTask) => {
@@ -284,22 +305,22 @@ export function TodoList() {
     setEditingText(task.title);
   };
 
-  const saveTaskEdit = (id: string) => { // Changed from async
+  const saveTaskEdit = async (id: string) => {
     if (!editingText.trim()) return;
     const updated = tasks.map((t) => (t.id === id ? { ...t, title: editingText } : t));
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
     setEditingTaskId(null);
     setEditingText('');
   };
 
-  const deleteTask = (id: string) => { // Changed from async
+  const deleteTask = async (id: string) => {
     const updated = tasks.filter((t) => t.id !== id);
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
   };
 
-  const addSubtask = (taskId: string, index: number) => { // Changed from async
+  const addSubtask = async (taskId: string, index: number) => {
     const inputs = subtaskInputs[taskId] || [];
     if (!Array.isArray(inputs)) return;
     
@@ -325,7 +346,7 @@ export function TodoList() {
     });
     
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
 
     const currentInputs = Array.isArray(subtaskInputs[taskId]) ? [...subtaskInputs[taskId]] : [''];
     currentInputs[index] = '';
@@ -357,7 +378,7 @@ export function TodoList() {
     setSubtaskInputs({ ...subtaskInputs, [taskId]: [] });
   };
 
-  const toggleSubtask = (taskId: string, subtaskId: string) => { // Changed from async
+  const toggleSubtask = async (taskId: string, subtaskId: string) => {
     const updated = tasks.map((t) => {
       if (t.id === taskId) {
         const existingSubtasks = Array.isArray(t.subtasks) ? t.subtasks : [];
@@ -372,10 +393,10 @@ export function TodoList() {
     });
     
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
   };
 
-  const deleteSubtask = (taskId: string, subtaskId: string) => { // Changed from async
+  const deleteSubtask = async (taskId: string, subtaskId: string) => {
     const updated = tasks.map((t) => {
       if (t.id === taskId) {
         const existingSubtasks = Array.isArray(t.subtasks) ? t.subtasks : [];
@@ -388,15 +409,15 @@ export function TodoList() {
     });
     
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
   };
 
-  const toggleReminder = (id: string) => { // Changed from async
+  const toggleReminder = async (id: string) => {
     const updated = tasks.map((t) =>
       t.id === id ? { ...t, reminderEnabled: !t.reminderEnabled } : t
     );
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
   };
 
   const toggleProjectSharing = (projectId: string, userEmail: string) => {
@@ -423,7 +444,7 @@ export function TodoList() {
     return [...ownProjects, ...sharedProjects];
   };
 
-  const saveProjectName = (oldName: string) => { // Changed from async
+  const saveProjectName = async (oldName: string) => {
     if (!editingProjectName.trim() || editingProjectName === oldName) {
       setEditingProjectId(null);
       return;
@@ -435,7 +456,7 @@ export function TodoList() {
       t.project === oldName ? { ...t, project: editingProjectName } : t
     );
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
     
     // Update project sharing
     if (projectSharing[oldName]) {
@@ -453,7 +474,7 @@ export function TodoList() {
     setEditingProjectId(null);
   };
 
-  const deleteProject = (projectName: string) => { // Changed from async
+  const deleteProject = async (projectName: string) => {
     if (projects.length <= 1) {
       alert("You must have at least one project");
       return;
@@ -470,7 +491,7 @@ export function TodoList() {
       t.project === projectName ? { ...t, project: newDefaultProject} : t
     );
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
 
     setProjects(remainingProjects);
 
@@ -486,12 +507,7 @@ export function TodoList() {
     }
   };
 
-  const startEditingProject = (projectName: string) => {
-    setEditingProjectId(projectName);
-    setEditingProjectName(projectName);
-  };
-
-  const setTaskReminder = (taskId: string, date: string, time: string) => { // Changed from async
+  const setTaskReminder = async (taskId: string, date: string, time: string) => {
     const updated = tasks.map(t => 
       t.id === taskId 
         ? { 
@@ -502,7 +518,7 @@ export function TodoList() {
         : t
     );
     setTasks(updated);
-    saveTodoTasks(updated); // Changed from saveTodos
+    await saveTodos(updated);
     setShowReminderDialog(null);
     setReminderDate('');
     setReminderTime('');
@@ -627,28 +643,7 @@ export function TodoList() {
     high: 'border-l-red-500',
   };
 
-  const moveTaskToKanbanBoard = (taskId: string, column: TaskStatus) => {
-    const task = tasks.find(t => t.id === taskId);
-    if (!task) return;
-
-    // Remove from todo list
-    const updatedTodoTasks = tasks.filter(t => t.id !== taskId);
-    setTasks(updatedTodoTasks);
-    saveTodoTasks(updatedTodoTasks);
-
-    // Add to kanban with selected column status
-    const kanbanTasks = loadKanbanTasks();
-    const kanbanTask: SharedTask = {
-      ...task,
-      status: column,
-    };
-    const updatedKanbanTasks = [...kanbanTasks, kanbanTask];
-    saveKanbanTasks(updatedKanbanTasks);
-
-    setMoveToKanbanDialog(null);
-    console.log('[v0] Task moved to Kanban:', column);
-  };
-
+  // Removed: moveTaskToKanbanBoard function
 
   console.log('[v0] Rendering TodoList - tasks:', tasks.length, 'filtered:', filteredTasks.length);
 
@@ -1066,13 +1061,6 @@ export function TodoList() {
 
                             <div className="flex gap-1 md:gap-2 flex-shrink-0">
                               <button
-                                onClick={() => setMoveToKanbanDialog(task.id)}
-                                className="p-2 text-muted-foreground hover:text-primary transition-colors"
-                                title="Move to Kanban"
-                              >
-                                <Share2 size={18} />
-                              </button>
-                              <button
                                 onClick={() => setShowReminderDialog(task.id)}
                                 className={`p-2 transition-colors ${
                                   task.reminderEnabled 
@@ -1265,66 +1253,6 @@ export function TodoList() {
             </Button>
           </Card>
         </div>
-      )}
-
-      {moveToKanbanDialog && (
-        <Dialog open={!!moveToKanbanDialog} onOpenChange={() => setMoveToKanbanDialog(null)}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Move to Kanban Board</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Select which column to move this task to:
-              </p>
-              <div className="space-y-2">
-                <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted">
-                  <input
-                    type="radio"
-                    name="kanban-column"
-                    value="todo"
-                    checked={selectedKanbanColumn === 'todo'}
-                    onChange={(e) => setSelectedKanbanColumn(e.target.value as TaskStatus)}
-                    className="w-4 h-4"
-                  />
-                  <div>
-                    <div className="font-medium">To Do</div>
-                    <div className="text-xs text-muted-foreground">Move to the To Do column</div>
-                  </div>
-                </label>
-                <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted">
-                  <input
-                    type="radio"
-                    name="kanban-column"
-                    value="inprogress"
-                    checked={selectedKanbanColumn === 'inprogress'}
-                    onChange={(e) => setSelectedKanbanColumn(e.target.value as TaskStatus)}
-                    className="w-4 h-4"
-                  />
-                  <div>
-                    <div className="font-medium">In Progress</div>
-                    <div className="text-xs text-muted-foreground">Move to the In Progress column</div>
-                  </div>
-                </label>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => moveTaskToKanbanBoard(moveToKanbanDialog, selectedKanbanColumn)}
-                  className="flex-1"
-                >
-                  Move to Kanban
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setMoveToKanbanDialog(null)}
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
       )}
 
     </div>
