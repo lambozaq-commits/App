@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { SharedTask } from '@/lib/shared-task-model';
-import { getTodos, saveTodos, subscribeTodoChanges, migrateGuestDataToSupabase } from '@/lib/supabase-sync';
+import { loadData, saveData, getUserId } from '@/lib/simple-storage'; // Replace data-api import with simple-storage
 
 interface SubTask {
   id: string;
@@ -87,29 +87,24 @@ export function TodoList() {
 
     console.log('[v0] TodoList initializing...');
     
-    const loadData = async () => {
-      await migrateGuestDataToSupabase();
-      
-      const user = localStorage.getItem('currentUser');
-      const users = localStorage.getItem('appUsers');
-      const guestMode = localStorage.getItem('guestMode');
-      console.log('[v0] User:', user, 'Guest mode:', guestMode);
-      
-      const loadedTasks = await getTodos();
-      console.log('[v0] Initial load - tasks count:', loadedTasks.length);
-      setTasks(loadedTasks);
-      
-      if (!guestMode && user) {
-        const unsubscribe = subscribeTodoChanges((updatedTasks) => {
-          console.log('[v0] Real-time update received:', updatedTasks.length, 'tasks');
-          setTasks(updatedTasks);
-        });
-        
-        return () => unsubscribe();
-      }
-    };
+    const currentUserId = getUserId();
+    console.log('[v0] Current user ID:', currentUserId);
     
-    loadData();
+    const user = localStorage.getItem('currentUser');
+    const users = localStorage.getItem('appUsers');
+    const guestMode = localStorage.getItem('guestMode');
+    console.log('[v0] User:', user, 'Guest mode:', guestMode);
+    
+    setCurrentUser(currentUserId);
+    if (users) {
+      const parsedUsers = JSON.parse(users);
+      setAllUsers(parsedUsers.map((u: any) => u.email));
+    }
+
+    const loadedTasks = loadData<SharedTask[]>('todo-tasks', []);
+    console.log('[v0] Initial load - tasks count:', loadedTasks.length);
+    console.log('[v0] Loaded tasks:', loadedTasks);
+    setTasks(loadedTasks);
     
     const savedProjects = localStorage.getItem(PROJECTS_STORAGE_KEY);
     const savedSharing = localStorage.getItem(PROJECT_SHARING_KEY);
@@ -132,26 +127,12 @@ export function TodoList() {
 
 
   useEffect(() => {
-    // Save projects to Supabase or localStorage
-    if (currentUser) {
-      // For authenticated users, projects and sharing settings are part of the user's data
-      // and should be saved via saveTodos or a dedicated user profile function.
-      // For now, we'll just log this to indicate it needs proper integration.
-      console.log('[v0] Saving projects to Supabase/user profile (needs implementation)');
-    } else {
-      // For guests, save to localStorage
-      localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
-    }
-  }, [projects, currentUser]);
+    localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+  }, [projects]);
 
   useEffect(() => {
-    // Save sharing settings to Supabase or localStorage
-    if (currentUser) {
-      console.log('[v0] Saving sharing to Supabase/user profile (needs implementation)');
-    } else {
-      localStorage.setItem(PROJECT_SHARING_KEY, JSON.stringify(projectSharing));
-    }
-  }, [projectSharing, currentUser]);
+    localStorage.setItem(PROJECT_SHARING_KEY, JSON.stringify(projectSharing));
+  }, [projectSharing]);
 
   useEffect(() => {
     const hasRequested = localStorage.getItem(NOTIFICATION_PERMISSION_KEY);
@@ -249,10 +230,13 @@ export function TodoList() {
     return '';
   };
 
-  const addTodo = async () => {
+  const addTodo = () => {
     if (!newTodo.trim()) return;
 
     console.log('[v0] addTodo called with:', newTodo);
+    
+    const currentUserId = getUserId();
+    console.log('[v0] Creating task with owner:', currentUserId);
     
     const parsedDate = parseDueDate(newTodo);
     const newTask: SharedTask = {
@@ -268,15 +252,18 @@ export function TodoList() {
       reminderEnabled: false,
       createdAt: new Date().toISOString(),
       subtasks: [],
-      owner: currentUser || 'guest',
+      owner: currentUserId, // Use currentUserId instead of 'unknown'
       recurring: selectedRecurring,
     };
 
-    const updated = [...tasks, newTask];
-    setTasks(updated);
-    
-    await saveTodos(updated);
-    console.log('[v0] Saved successfully');
+    setTasks(prevTasks => {
+      const updated = [...prevTasks, newTask];
+      console.log('[v0] Adding task. New count:', updated.length);
+      console.log('[v0] Updated tasks array:', updated);
+      saveData('todo-tasks', updated);
+      console.log('[v0] Saved successfully');
+      return updated;
+    });
     
     // Reset form
     setNewTodo('');
@@ -286,18 +273,20 @@ export function TodoList() {
     setSelectedRecurring('none');
   };
 
-  const toggleTask = async (id: string) => {
-    const updated = tasks.map((t) => 
-      t.id === id 
-        ? { 
-            ...t, 
-            status: t.status === 'done' ? 'todo' : 'done',
-            completedAt: t.status === 'done' ? undefined : new Date().toISOString()
-          } 
-        : t
-    );
-    setTasks(updated);
-    await saveTodos(updated);
+  const toggleTask = (id: string) => {
+    setTasks(prevTasks => {
+      const updated = prevTasks.map((t) => 
+        t.id === id 
+          ? { 
+              ...t, 
+              status: t.status === 'done' ? 'todo' : 'done',
+              completedAt: t.status === 'done' ? undefined : new Date().toISOString()
+            } 
+          : t
+      );
+      saveData('todo-tasks', updated);
+      return updated;
+    });
   };
 
   const startEditingTask = (task: SharedTask) => {
@@ -305,48 +294,53 @@ export function TodoList() {
     setEditingText(task.title);
   };
 
-  const saveTaskEdit = async (id: string) => {
+  const saveTaskEdit = (id: string) => {
     if (!editingText.trim()) return;
-    const updated = tasks.map((t) => (t.id === id ? { ...t, title: editingText } : t));
-    setTasks(updated);
-    await saveTodos(updated);
+    setTasks(prevTasks => {
+      const updated = prevTasks.map((t) => (t.id === id ? { ...t, title: editingText } : t));
+      saveData('todo-tasks', updated);
+      return updated;
+    });
     setEditingTaskId(null);
     setEditingText('');
   };
 
-  const deleteTask = async (id: string) => {
-    const updated = tasks.filter((t) => t.id !== id);
-    setTasks(updated);
-    await saveTodos(updated);
+  const deleteTask = (id: string) => {
+    setTasks(prevTasks => {
+      const updated = prevTasks.filter((t) => t.id !== id);
+      saveData('todo-tasks', updated);
+      return updated;
+    });
   };
 
-  const addSubtask = async (taskId: string, index: number) => {
+  const addSubtask = (taskId: string, index: number) => {
     const inputs = subtaskInputs[taskId] || [];
     if (!Array.isArray(inputs)) return;
     
     const text = inputs[index] || '';
     if (!text.trim()) return;
     
-    const updated = tasks.map((t) => {
-      if (t.id === taskId) {
-        const existingSubtasks = Array.isArray(t.subtasks) ? t.subtasks : [];
-        return {
-          ...t,
-          subtasks: [
-            ...existingSubtasks,
-            {
-              id: Date.now().toString() + Math.random(),
-              text: text.trim(),
-              completed: false,
-            },
-          ],
-        };
-      }
-      return t;
+    setTasks(prevTasks => {
+      const updated = prevTasks.map((t) => {
+        if (t.id === taskId) {
+          const existingSubtasks = Array.isArray(t.subtasks) ? t.subtasks : [];
+          return {
+            ...t,
+            subtasks: [
+              ...existingSubtasks,
+              {
+                id: Date.now().toString() + Math.random(),
+                text: text.trim(),
+                completed: false,
+              },
+            ],
+          };
+        }
+        return t;
+      });
+      saveData('todo-tasks', updated);
+      return updated;
     });
-    
-    setTasks(updated);
-    await saveTodos(updated);
 
     const currentInputs = Array.isArray(subtaskInputs[taskId]) ? [...subtaskInputs[taskId]] : [''];
     currentInputs[index] = '';
@@ -378,46 +372,50 @@ export function TodoList() {
     setSubtaskInputs({ ...subtaskInputs, [taskId]: [] });
   };
 
-  const toggleSubtask = async (taskId: string, subtaskId: string) => {
-    const updated = tasks.map((t) => {
-      if (t.id === taskId) {
-        const existingSubtasks = Array.isArray(t.subtasks) ? t.subtasks : [];
-        return {
-          ...t,
-          subtasks: existingSubtasks.map((st) =>
-            st.id === subtaskId ? { ...st, completed: !st.completed } : st
-          ),
-        };
-      }
-      return t;
+  const toggleSubtask = (taskId: string, subtaskId: string) => {
+    setTasks(prevTasks => {
+      const updated = prevTasks.map((t) => {
+        if (t.id === taskId) {
+          const existingSubtasks = Array.isArray(t.subtasks) ? t.subtasks : [];
+          return {
+            ...t,
+            subtasks: existingSubtasks.map((st) =>
+              st.id === subtaskId ? { ...st, completed: !st.completed } : st
+            ),
+          };
+        }
+        return t;
+      });
+      saveData('todo-tasks', updated);
+      return updated;
     });
-    
-    setTasks(updated);
-    await saveTodos(updated);
   };
 
-  const deleteSubtask = async (taskId: string, subtaskId: string) => {
-    const updated = tasks.map((t) => {
-      if (t.id === taskId) {
-        const existingSubtasks = Array.isArray(t.subtasks) ? t.subtasks : [];
-        return {
-          ...t,
-          subtasks: existingSubtasks.filter((st) => st.id !== subtaskId),
-        };
-      }
-      return t;
+  const deleteSubtask = (taskId: string, subtaskId: string) => {
+    setTasks(prevTasks => {
+      const updated = prevTasks.map((t) => {
+        if (t.id === taskId) {
+          const existingSubtasks = Array.isArray(t.subtasks) ? t.subtasks : [];
+          return {
+            ...t,
+            subtasks: existingSubtasks.filter((st) => st.id !== subtaskId),
+          };
+        }
+        return t;
+      });
+      saveData('todo-tasks', updated);
+      return updated;
     });
-    
-    setTasks(updated);
-    await saveTodos(updated);
   };
 
-  const toggleReminder = async (id: string) => {
-    const updated = tasks.map((t) =>
-      t.id === id ? { ...t, reminderEnabled: !t.reminderEnabled } : t
-    );
-    setTasks(updated);
-    await saveTodos(updated);
+  const toggleReminder = (id: string) => {
+    setTasks(prevTasks => {
+      const updated = prevTasks.map((t) =>
+        t.id === id ? { ...t, reminderEnabled: !t.reminderEnabled } : t
+      );
+      saveData('todo-tasks', updated);
+      return updated;
+    });
   };
 
   const toggleProjectSharing = (projectId: string, userEmail: string) => {
@@ -428,7 +426,6 @@ export function TodoList() {
         : [...current, userEmail];
       return { ...prev, [projectId]: updated };
     });
-    // TODO: Save project sharing settings to Supabase/user profile when integrated
   };
 
   const getAccessibleProjects = () => {
@@ -444,7 +441,12 @@ export function TodoList() {
     return [...ownProjects, ...sharedProjects];
   };
 
-  const saveProjectName = async (oldName: string) => {
+  const startEditingProject = (projectName: string) => {
+    setEditingProjectId(projectName);
+    setEditingProjectName(projectName);
+  };
+
+  const saveProjectName = (oldName: string) => {
     if (!editingProjectName.trim() || editingProjectName === oldName) {
       setEditingProjectId(null);
       return;
@@ -452,11 +454,13 @@ export function TodoList() {
 
     setProjects(projects.map(p => p === oldName ? editingProjectName : p));
     
-    const updated = tasks.map(t => 
-      t.project === oldName ? { ...t, project: editingProjectName } : t
-    );
-    setTasks(updated);
-    await saveTodos(updated);
+    setTasks(prevTasks => {
+      const updated = prevTasks.map(t => 
+        t.project === oldName ? { ...t, project: editingProjectName } : t
+      );
+      saveData('todo-tasks', updated);
+      return updated;
+    });
     
     // Update project sharing
     if (projectSharing[oldName]) {
@@ -464,7 +468,6 @@ export function TodoList() {
       newSharing[editingProjectName] = newSharing[oldName];
       delete newSharing[oldName];
       setProjectSharing(newSharing);
-      // TODO: Save project sharing settings to Supabase/user profile when integrated
     }
     
     if (selectedProject === oldName) {
@@ -474,7 +477,7 @@ export function TodoList() {
     setEditingProjectId(null);
   };
 
-  const deleteProject = async (projectName: string) => {
+  const deleteProject = (projectName: string) => {
     if (projects.length <= 1) {
       alert("You must have at least one project");
       return;
@@ -487,11 +490,13 @@ export function TodoList() {
     const remainingProjects = projects.filter(p => p !== projectName);
     const newDefaultProject = remainingProjects[0];
 
-    const updated = tasks.map(t => 
-      t.project === projectName ? { ...t, project: newDefaultProject} : t
-    );
-    setTasks(updated);
-    await saveTodos(updated);
+    setTasks(prevTasks => {
+      const updated = prevTasks.map(t => 
+        t.project === projectName ? { ...t, project: newDefaultProject} : t
+      );
+      saveData('todo-tasks', updated);
+      return updated;
+    });
 
     setProjects(remainingProjects);
 
@@ -499,7 +504,6 @@ export function TodoList() {
       const newSharing = { ...projectSharing };
       delete newSharing[projectName];
       setProjectSharing(newSharing);
-      // TODO: Save project sharing settings to Supabase/user profile when integrated
     }
 
     if (selectedProject === projectName) {
@@ -507,18 +511,20 @@ export function TodoList() {
     }
   };
 
-  const setTaskReminder = async (taskId: string, date: string, time: string) => {
-    const updated = tasks.map(t => 
-      t.id === taskId 
-        ? { 
-            ...t, 
-            reminderTime: `${date}T${time}`,
-            reminderEnabled: true 
-          } 
-        : t
-    );
-    setTasks(updated);
-    await saveTodos(updated);
+  const setTaskReminder = (taskId: string, date: string, time: string) => {
+    setTasks(prevTasks => {
+      const updated = prevTasks.map(t => 
+        t.id === taskId 
+          ? { 
+              ...t, 
+              reminderTime: `${date}T${time}`,
+              reminderEnabled: true 
+            } 
+          : t
+      );
+      saveData('todo-tasks', updated);
+      return updated;
+    });
     setShowReminderDialog(null);
     setReminderDate('');
     setReminderTime('');
