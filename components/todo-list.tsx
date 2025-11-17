@@ -12,7 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { SharedTask } from '@/lib/shared-task-model';
+import { SharedTask, TaskStatus } from '@/lib/shared-task-model'; // Changed import to include TaskStatus
 import { loadData, saveData, getUserId } from '@/lib/simple-storage'; // Replace data-api import with simple-storage
 
 interface SubTask {
@@ -75,9 +75,9 @@ export function TodoList() {
   const [showReminderDialog, setShowReminderDialog] = useState<string | null>(null);
   const [reminderDate, setReminderDate] = useState('');
   const [reminderTime, setReminderTime] = useState('');
-
-  // Removed: const [moveToKanbanDialog, setMoveToKanbanDialog] = useState<string | null>(null);
-  // Removed: const [selectedKanbanColumn, setSelectedKanbanColumn] = useState<TaskStatus>('todo');
+  
+  const [moveToKanbanDialog, setMoveToKanbanDialog] = useState<string | null>(null);
+  const [selectedKanbanColumn, setSelectedKanbanColumn] = useState<TaskStatus>('todo');
 
   const hasInitializedRef = useRef(false);
 
@@ -623,6 +623,35 @@ export function TodoList() {
     };
   };
 
+  const moveTaskToKanbanBoard = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    // Update task status to selected column
+    const taskForKanban: SharedTask = {
+      ...task,
+      status: selectedKanbanColumn,
+    };
+
+    // Load current kanban tasks
+    const kanbanTasks = loadData<SharedTask[]>('kanban-tasks', []);
+    
+    // Add task to kanban
+    const updatedKanbanTasks = [...kanbanTasks, taskForKanban];
+    saveData('kanban-tasks', updatedKanbanTasks);
+    console.log('[v0] Moved task to Kanban:', task.title, 'to column:', selectedKanbanColumn);
+
+    // Remove from todo list
+    setTasks(prevTasks => {
+      const updated = prevTasks.filter(t => t.id !== taskId);
+      saveData('todo-tasks', updated);
+      return updated;
+    });
+
+    // Close dialog
+    setMoveToKanbanDialog(null);
+  };
+
   const analytics = getAnalytics();
 
   // Extract all unique tags from tasks that are accessible to the current user
@@ -648,8 +677,6 @@ export function TodoList() {
     medium: 'border-l-yellow-500',
     high: 'border-l-red-500',
   };
-
-  // Removed: moveTaskToKanbanBoard function
 
   console.log('[v0] Rendering TodoList - tasks:', tasks.length, 'filtered:', filteredTasks.length);
 
@@ -1067,6 +1094,13 @@ export function TodoList() {
 
                             <div className="flex gap-1 md:gap-2 flex-shrink-0">
                               <button
+                                onClick={() => setMoveToKanbanDialog(task.id)}
+                                className="p-2 text-muted-foreground hover:text-primary transition-colors"
+                                title="Move to Kanban"
+                              >
+                                <Share2 size={18} />
+                              </button>
+                              <button
                                 onClick={() => setShowReminderDialog(task.id)}
                                 className={`p-2 transition-colors ${
                                   task.reminderEnabled 
@@ -1259,6 +1293,80 @@ export function TodoList() {
             </Button>
           </Card>
         </div>
+      )}
+
+      {moveToKanbanDialog && (
+        <Dialog open={!!moveToKanbanDialog} onOpenChange={() => setMoveToKanbanDialog(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Move to Kanban Board</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Select which column to move this task to:
+              </p>
+              <div className="space-y-2">
+                <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted">
+                  <input
+                    type="radio"
+                    name="kanban-column"
+                    value="todo"
+                    checked={selectedKanbanColumn === 'todo'}
+                    onChange={(e) => setSelectedKanbanColumn(e.target.value as TaskStatus)}
+                    className="w-4 h-4"
+                  />
+                  <div>
+                    <p className="font-medium">To Do</p>
+                    <p className="text-xs text-muted-foreground">Tasks that need to be started</p>
+                  </div>
+                </label>
+                <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted">
+                  <input
+                    type="radio"
+                    name="kanban-column"
+                    value="inprogress"
+                    checked={selectedKanbanColumn === 'inprogress'}
+                    onChange={(e) => setSelectedKanbanColumn(e.target.value as TaskStatus)}
+                    className="w-4 h-4"
+                  />
+                  <div>
+                    <p className="font-medium">In Progress</p>
+                    <p className="text-xs text-muted-foreground">Tasks currently being worked on</p>
+                  </div>
+                </label>
+                <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted">
+                  <input
+                    type="radio"
+                    name="kanban-column"
+                    value="done"
+                    checked={selectedKanbanColumn === 'done'}
+                    onChange={(e) => setSelectedKanbanColumn(e.target.value as TaskStatus)}
+                    className="w-4 h-4"
+                  />
+                  <div>
+                    <p className="font-medium">Done</p>
+                    <p className="text-xs text-muted-foreground">Completed tasks</p>
+                  </div>
+                </label>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => moveTaskToKanbanBoard(moveToKanbanDialog)}
+                  className="flex-1"
+                >
+                  Move Task
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setMoveToKanbanDialog(null)}
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
 
     </div>
