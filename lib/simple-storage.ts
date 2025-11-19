@@ -10,17 +10,32 @@ export function getUserId(): string {
                   document.cookie.includes('guest-mode=true')
   
   if (isGuest) {
-    let guestId = localStorage.getItem('guestUserId')
+    let guestId = document.cookie.match(/guest-id=([^;]+)/)?.[1]
+    
+    if (!guestId) {
+      guestId = localStorage.getItem('guestUserId') || ''
+    }
+    
     if (!guestId) {
       guestId = `guest_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       localStorage.setItem('guestUserId', guestId)
-      document.cookie = `guest-id=${guestId}; path=/; max-age=31536000`
+      document.cookie = `guest-id=${guestId}; path=/; max-age=31536000; SameSite=Lax`
+      console.log('[Storage] Created new persistent guest ID:', guestId)
+    } else {
+      console.log('[Storage] Using existing guest ID:', guestId)
+      // Ensure both storage methods have the ID
+      localStorage.setItem('guestUserId', guestId)
+      if (!document.cookie.includes(`guest-id=${guestId}`)) {
+        document.cookie = `guest-id=${guestId}; path=/; max-age=31536000; SameSite=Lax`
+      }
     }
     return guestId
   }
   
   // Authenticated user
-  return localStorage.getItem('currentUser') || 'anonymous'
+  const userId = localStorage.getItem('currentUser') || 'anonymous'
+  console.log('[Storage] Using authenticated user ID:', userId)
+  return userId
 }
 
 // Simple, synchronous storage operations
